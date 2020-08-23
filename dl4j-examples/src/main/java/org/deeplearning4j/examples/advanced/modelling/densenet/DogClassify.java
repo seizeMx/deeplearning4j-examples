@@ -32,6 +32,7 @@ import org.deeplearning4j.examples.advanced.modelling.densenet.imageUtils.NoiseT
 import org.deeplearning4j.examples.advanced.modelling.densenet.model.DenseNetModel;
 import org.deeplearning4j.examples.utils.DownloaderUtility;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
+import org.deeplearning4j.nn.conf.GradientNormalization;
 import org.deeplearning4j.nn.conf.distribution.NormalDistribution;
 import org.deeplearning4j.nn.conf.inputs.InputType;
 import org.deeplearning4j.nn.conf.layers.ConvolutionLayer;
@@ -59,9 +60,12 @@ import org.nd4j.linalg.activations.Activation;
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.dataset.api.preprocessor.DataNormalization;
 import org.nd4j.linalg.dataset.api.preprocessor.ImagePreProcessingScaler;
+import org.nd4j.linalg.learning.config.Adam;
 import org.nd4j.linalg.learning.config.Nadam;
 import org.nd4j.linalg.learning.config.Nesterovs;
 import org.nd4j.linalg.lossfunctions.LossFunctions;
+import org.nd4j.linalg.schedule.ScheduleType;
+import org.nd4j.linalg.schedule.StepSchedule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -82,9 +86,9 @@ public class DogClassify {
     private static final int height = 224;
     private static final int width = 224;
     private static final int channels = 3;
-    private static final int batchSize = 6;
+    private static final int batchSize = 32;
     private static final int outputNum = 5;
-    private static final int numEpochs = 5;
+    private static final int numEpochs = 60;
     private static final double splitTrainTest = 0.8;
 
     public static String dataLocalPath;
@@ -103,7 +107,7 @@ public class DogClassify {
         validationData = inputSplit[1];
 
 
-        ComputationGraph computationGraph = getComputationGraphRES();
+        ComputationGraph computationGraph = getComputationGraphSQ_CU();
 
 
         setListeners(computationGraph, dataNormalization, labelMaker, 1);
@@ -136,7 +140,7 @@ public class DogClassify {
         //Construct a new model with the intended architecture and print summary
         ComputationGraph computationGraph = new TransferLearning.GraphBuilder(sq)
             .fineTuneConfiguration(fineTuneConf)
-//            .setFeatureExtractor("global_average_pooling2d_3") //the specified layer and below are "frozen"
+            .setFeatureExtractor("global_average_pooling2d_3") //the specified layer and below are "frozen"
             .removeVertexKeepConnections("predictions") //replace the functionality of the final vertex
             .addLayer("predictions",
                 new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
@@ -176,21 +180,38 @@ public class DogClassify {
         //Construct a new model with the intended architecture and print summary
         ComputationGraph computationGraph = new TransferLearning.GraphBuilder(sq)
             .fineTuneConfiguration(fineTuneConf)
-            .setFeatureExtractor("drop9") //the specified layer and below are "frozen"
-            .removeVertexKeepConnections("conv10") //replace the functionality of the final vertex
-            .addLayer("conv10",
-                new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
-                    .nIn(512).nOut(5)
-                    .weightInit(WeightInit.XAVIER) //This weight init dist gave better results than Xavier
-                    .activation(Activation.SOFTMAX).build(),
-                "drop9")
+//            .setFeatureExtractor("drop9") //the specified layer and below are "frozen"
+//            .removeVertexKeepConnections("conv10") //replace the functionality of the final vertex
+//            .addLayer("conv10",
+//                new ConvolutionLayer.Builder(1,1).nOut(5)
+//                    .weightInit(WeightInit.XAVIER) //This weight init dist gave better results than Xavier
+//                    .build(),
+//                "drop9")
             .setInputTypes(InputType.convolutional(height, width, channels))
+            .setOutputs("global_average_pooling2d_5")
             .build();
         log.info(computationGraph.summary());
 
 
 //        ComputationGraph computationGraph = DenseNetModel.getInstance().buildNetwork(432545609, channels, outputNum, width, height);
         return computationGraph;
+    }
+
+
+    private static ComputationGraph getComputationGraphSQ_CU() throws IOException {
+        log.info("BUILD MODEL");
+
+        ZooModel zooModel = SqueezeNet.builder()
+            .cudnnAlgoMode(ConvolutionLayer.AlgoMode.NO_WORKSPACE)
+            .updater(new Adam(new StepSchedule(ScheduleType.EPOCH, 0.001D, 0.5, 20)))
+            .weightInit( WeightInit.XAVIER)
+            .numClasses(5)
+            .build();
+
+        ComputationGraph sq  = zooModel.init();
+        log.info(sq.summary());
+
+        return sq;
     }
 
 
