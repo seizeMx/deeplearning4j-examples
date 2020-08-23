@@ -50,16 +50,14 @@ import org.deeplearning4j.ui.model.stats.StatsListener;
 import org.deeplearning4j.ui.model.storage.InMemoryStatsStorage;
 import org.deeplearning4j.zoo.PretrainedType;
 import org.deeplearning4j.zoo.ZooModel;
-import org.deeplearning4j.zoo.model.AlexNet;
-import org.deeplearning4j.zoo.model.NASNet;
-import org.deeplearning4j.zoo.model.ResNet50;
-import org.deeplearning4j.zoo.model.SqueezeNet;
+import org.deeplearning4j.zoo.model.*;
 import org.nd4j.common.primitives.Pair;
 import org.nd4j.evaluation.classification.Evaluation;
 import org.nd4j.linalg.activations.Activation;
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.dataset.api.preprocessor.DataNormalization;
 import org.nd4j.linalg.dataset.api.preprocessor.ImagePreProcessingScaler;
+import org.nd4j.linalg.dataset.api.preprocessor.VGG16ImagePreProcessor;
 import org.nd4j.linalg.learning.config.Adam;
 import org.nd4j.linalg.learning.config.Nadam;
 import org.nd4j.linalg.learning.config.Nesterovs;
@@ -78,7 +76,8 @@ import java.util.Random;
 public class DogClassify {
     private static final Logger log = LoggerFactory.getLogger(DogClassify.class);
 
-    private static final String MODEL_PATH = "/home/sylar/ide/ideaIC-2020.2/dog-classifier-models";
+//    private static final String MODEL_PATH = "/home/sylar/ide/ideaIC-2020.2/dog-classifier-models";
+    private static final String MODEL_PATH = "/data/home/sylar/workspace/exp/dog-classifier-models";
 
     private static InputSplit trainingData;
     private static InputSplit validationData;
@@ -93,13 +92,19 @@ public class DogClassify {
 
     public static String dataLocalPath;
 
+    private static final String featureExtractionLayer = "fc2";
+
+    protected static final int numClasses = 5;
+
     public static void main(String[] args) throws Exception {
-        File mainPath = new File("/home/sylar/ide/ideaIC-2020.2/dog-classifier");
+//        File mainPath = new File("/home/sylar/ide/ideaIC-2020.2/dog-classifier");
+        File mainPath = new File("/data/home/sylar/workspace/exp/imgs");
         Random random = new Random(1234);
 
         FileSplit fileSplit = new FileSplit(mainPath, NativeImageLoader.ALLOWED_FORMATS, random);
         ParentPathLabelGenerator labelMaker = new ParentPathLabelGenerator();
-        DataNormalization dataNormalization = new ImagePreProcessingScaler(0, 1);
+//        DataNormalization dataNormalization = new ImagePreProcessingScaler(0, 1);
+        DataNormalization dataNormalization = new VGG16ImagePreProcessor();
 
         BalancedPathFilter pathFilter = new BalancedPathFilter(random, labelMaker, 0);
         InputSplit[] inputSplit = fileSplit.sample(pathFilter, splitTrainTest, 1 - splitTrainTest);
@@ -107,7 +112,7 @@ public class DogClassify {
         validationData = inputSplit[1];
 
 
-        ComputationGraph computationGraph = getComputationGraphSQ_CU();
+        ComputationGraph computationGraph = getComputationGraphVGG();
 
 
         setListeners(computationGraph, dataNormalization, labelMaker, 1);
@@ -215,14 +220,44 @@ public class DogClassify {
     }
 
 
+    private static ComputationGraph getComputationGraphVGG() throws IOException {
+        log.info("BUILD MODEL");
+
+        ZooModel zooModel = VGG16.builder().build();
+        ComputationGraph vgg16 = (ComputationGraph) zooModel.initPretrained();
+        log.info(vgg16.summary());
+
+        FineTuneConfiguration fineTuneConf = new FineTuneConfiguration.Builder()
+            .updater(new Nesterovs(5e-5))
+            .seed(1234)
+            .build();
+
+        //Construct a new model with the intended architecture and print summary
+        ComputationGraph vgg16Transfer = new TransferLearning.GraphBuilder(vgg16)
+            .fineTuneConfiguration(fineTuneConf)
+            .setFeatureExtractor(featureExtractionLayer) //the specified layer and below are "frozen"
+            .removeVertexKeepConnections("predictions") //replace the functionality of the final vertex
+            .addLayer("predictions",
+                new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
+                    .nIn(4096).nOut(numClasses)
+                    .weightInit(new NormalDistribution(0,0.2*(2.0/(4096+numClasses)))) //This weight init dist gave better results than Xavier
+                    .activation(Activation.SOFTMAX).build(),
+                "fc2")
+            .build();
+        log.info(vgg16Transfer.summary());
+
+        return vgg16Transfer;
+    }
+
+
     private static ImageTransform getImageTransform() {
         Random random = new Random(1234);
 //        ImageTransform RandomCrop = new RandomCropTransform(height, width);
-        ResizeImageTransform RandomCrop = new ResizeImageTransform(height, width);
+        ImageTransform RandomCrop = new FlipImageTransform(0);
         ImageTransform show = new ShowImageTransform("Display");
 
         List<Pair<ImageTransform, Double>> pipeline = Arrays.asList(
-            new Pair<>(RandomCrop, 1.0)/*,
+            new Pair<>(RandomCrop, 0.5)/*,
             new Pair<>(show, 1.0)*/
         );
         return new PipelineImageTransform(pipeline, false);
